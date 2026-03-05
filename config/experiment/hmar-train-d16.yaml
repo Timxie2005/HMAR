@@ -4,7 +4,7 @@
 # To view a copy of this license, please refer to LICENSE
 
 depth: 16
-bs: 768
+bs: 64
 ep: 200
 fp16: 1
 alng: 1e-3
