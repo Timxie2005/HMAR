@@ -40,13 +40,50 @@ def build_everything(args: Args):
     return hmar
 
 
+def _extract_state_dict(raw_ckpt):
+    if isinstance(raw_ckpt, dict) and "trainer" in raw_ckpt and isinstance(raw_ckpt["trainer"], dict):
+        trainer_state = raw_ckpt["trainer"]
+        if "transformer_wo_ddp" in trainer_state:
+            return trainer_state["transformer_wo_ddp"]
+        if "state_dict" in trainer_state:
+            return trainer_state["state_dict"]
+    if isinstance(raw_ckpt, dict) and "state_dict" in raw_ckpt and isinstance(raw_ckpt["state_dict"], dict):
+        return raw_ckpt["state_dict"]
+    return raw_ckpt
+
+
+def _load_hmar_checkpoint(hmar: HMAR, ckpt_path: str, args: Args):
+    state = _extract_state_dict(torch.load(ckpt_path, map_location="cpu", weights_only=True))
+
+    if not isinstance(state, dict):
+        raise RuntimeError(f"Unsupported checkpoint format at {ckpt_path}")
+
+    keys = list(state.keys())
+    has_split_hmar_keys = any(k.startswith(("base_blocks.", "ns_blocks.", "mask_blocks.")) for k in keys)
+    has_legacy_hmar_keys = any(k.startswith("blocks.") for k in keys)
+    has_mask_weights = any(k.startswith(("mask_blocks.", "mask_head", "mask_embed")) for k in keys)
+
+    if has_split_hmar_keys:
+        hmar.load_state_dict(state, strict=True)
+        return
+
+    if has_legacy_hmar_keys:
+        hmar.load_base_and_ns_state_dict(state)
+        if args.mask and not has_mask_weights:
+            print("[warn] Checkpoint has no mask branch weights; switching mask=False for sampling.")
+            args.mask = False
+        return
+
+    hmar.load_state_dict(state, strict=False)
+
+
 if __name__ == "__main__":
     args: Args = get_args(cfg_folder='evaluate')
     hmar = build_everything(args)
     torch.set_default_device(f"cuda")
 
-    hmar.load_state_dict(torch.load("hmar-d16.pth", map_location="cpu", weights_only=True))
     hmar.eval()
+    _load_hmar_checkpoint(hmar, f"{args.checkpoint}.pth", args)
 
     sample_folder = os.path.join(os.getcwd(), f"samples-{args.checkpoint}")
     
