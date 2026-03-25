@@ -16,10 +16,14 @@ from contextlib import contextmanager
 from functools import partial
 from multiprocessing import cpu_count
 from multiprocessing.pool import ThreadPool
-from typing import Iterable, Optional, Tuple
+from typing import TYPE_CHECKING, Iterable, Optional, Tuple
 
 import numpy as np
 import requests
+
+if os.environ.get("HMAR_EVAL_TF_DEVICE", "cpu").lower() == "cpu":
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
+
 import tensorflow.compat.v1 as tf
 import torch
 import torchvision
@@ -28,7 +32,9 @@ from tqdm import tqdm
 from tqdm.auto import tqdm
 
 import dist
-from models import HMAR
+
+if TYPE_CHECKING:
+    from models import HMAR
 
 INCEPTION_V3_URL = "https://openaipublic.blob.core.windows.net/diffusion/jul-2021/ref_batches/classify_image_graph_def.pb"
 INCEPTION_V3_PATH = "classify_image_graph_def.pb"
@@ -37,19 +43,23 @@ FID_POOL_NAME = "pool_3:0"
 FID_SPATIAL_NAME = "mixed_6/conv:0"
 
 
+def _build_tf_session():
+    tf_device = os.environ.get("HMAR_EVAL_TF_DEVICE", "cpu").lower()
+    config = tf.ConfigProto(
+        allow_soft_placement=True,
+        device_count={"GPU": 0} if tf_device == "cpu" else None,
+    )
+    if tf_device == "cpu":
+        config.gpu_options.visible_device_list = ""
+    return tf.Session(config=config)
+
+
 def _compute_metrics(ref_batch, sample_batch):
     """
     ref_batch: path to the reference batch
     sample_batch: path to the sample batch
     """
-
-    config = tf.ConfigProto(
-        # intra_op_parallelism_threads=1, 
-        # inter_op_parallelism_threads=1,
-        allow_soft_placement=True  # allows DecodeJpeg to run on CPU in Inception graph
-    )
-    # config.gpu_options.allow_growth = False
-    evaluator = Evaluator(tf.Session(config=config))
+    evaluator = Evaluator(_build_tf_session())
 
     # This will cause TF to print a bunch of verbose stuff now rather
     # than after the next print(), to help prevent confusion.
@@ -675,7 +685,7 @@ def _numpy_partition(arr, kth, **kwargs):
         return list(pool.map(partial(np.partition, kth=kth, **kwargs), batches))
     
 def generate_50k_samples(
-     hmar: HMAR, sample_folder: str ="samples",  n_classes: int = 1000, num_samples = 1, top_p = 0.96, top_k = 900, cfg = 1.5, more_smooth = False,
+    hmar: "HMAR", sample_folder: str ="samples",  n_classes: int = 1000, num_samples = 1, top_p = 0.96, top_k = 900, cfg = 1.5, more_smooth = False,
      mask=True, mask_schedule=None
 ):
     if os.path.exists(sample_folder):
